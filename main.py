@@ -162,21 +162,21 @@ def siacci1(vp):
         p = 2.08702306738884
     return a * vp**p
 
-def numerical_solve(v0, bc, dt, cd_func):
+def numerical_solve(v0, bc, dist, cd_func):
+    dt = 1 / 60
+
     temp = 59
     pressure = 29.92
     rh = 50
+    wv_pressure = 0.50
 
     v_sound = 49.0223*(temp + 459.67)**0.5
-    v_sound *= 1 + 0.0014 * rh * pressure / 29.92
+    v_sound *= 1 + 0.0014 * rh * wv_pressure / 29.92
 
     density_air_std = 0.0764742
     density_air = (pressure / 29.92) * (518.67 / (temp + 459.67)) * density_air_std
-    print(density_air)
-    density_air *= 1 - 0.00378 * rh * pressure / 29.92
-    print(density_air)
-    density_air = 0.0762
-
+    density_air *= 1 - 0.00378 * rh * wv_pressure / 29.92
+    
     def cd_star(speed):
         m = speed / v_sound
         result = density_air * math.pi * cd_func(m) / (1152.0 * bc)
@@ -187,10 +187,25 @@ def numerical_solve(v0, bc, dt, cd_func):
     g = np.array([0.0, 0.0, -32.17405])
     v = v0
     t = 0.0
-    while x[0] < 6000:
+    while x[0] < 3 * dist:
         speed = linalg.norm(v)
-        test = (-cd_star(speed) * speed * v + g) * dt
-        v += test
+
+        # Runge-Kutta 4th order
+        # k1 = -cd_star(speed) * speed * v + g
+        # y = v + k1/2 * dt
+        # speed = linalg.norm(y)
+        # k2 = -cd_star(speed) * speed * y + g
+        # y = v + k2/2 * dt
+        # speed = linalg.norm(y)
+        # k3 = -cd_star(speed) * speed * y + g
+        # y = v + k3 * dt
+        # speed = linalg.norm(y)
+        # k4 = -cd_star(speed) * speed * y + g
+        # v += (k1 + 2*k2 + 2*k3 + k4) * dt / 6
+
+        dv = (-cd_star(speed) * speed * v + g) 
+        v += dv * dt
+
         x += v * dt
         t += dt
 
@@ -208,8 +223,9 @@ def main():
     v0 = np.array([2970, 0.0, 0.0])
     bc = 0.371
     mass = 62
+    dist = 2000 # feet
 
-    x, v = numerical_solve(v0, bc, 1/60, b_spline)
+    x, v = numerical_solve(v0, bc, dist, b_spline)
     print(12 * x[2], linalg.norm(v))
 
     # shooterscalculator
