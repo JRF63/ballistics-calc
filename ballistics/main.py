@@ -1,8 +1,8 @@
-import math
-import matplotlib.pyplot as plt
+from . import environment
 import numpy as np
 from numpy import linalg
 from scipy.interpolate import make_interp_spline
+
 
 def numerical_solve(v0, bc, time_of_flight, cd_func):
     dt = 1 / 60
@@ -15,19 +15,20 @@ def numerical_solve(v0, bc, time_of_flight, cd_func):
     v_sound = 49.0223*(temp + 459.67)**0.5
 
     density_air_std = 0.0764742
-    density_air = (pressure / 29.92) * (518.67 / (temp + 459.67)) * density_air_std
+    density_air = (pressure / 29.92) * (518.67 /
+                                        (temp + 459.67)) * density_air_std
 
     v_sound_corr = 1 + 0.0014 * rh * wv_pressure / 29.92
     density_air_corr = 1 - 0.00378 * rh * wv_pressure / 29.92
 
     v_sound *= v_sound_corr
     density_air *= density_air_corr
-    
+
     def cd_star(speed):
         m = speed / v_sound
-        result = density_air * math.pi * cd_func(m) / (1152.0 * bc)
+        result = density_air * np.pi * cd_func(m) / (1152.0 * bc)
         return result
-    
+
     ts = []
     xs = []
     vs = []
@@ -86,12 +87,14 @@ def numerical_solve(v0, bc, time_of_flight, cd_func):
 
     return ts, xs, vs
 
+
 def parse_drag_table(filename: str):
     table = []
     with open(filename) as f:
         for line in f:
             table.append(tuple(map(float, line.strip().split())))
     return table
+
 
 def main():
     g7 = parse_drag_table('data/mcg7.txt')
@@ -146,7 +149,8 @@ def main():
     bc = float('inf')
     muzzle_speed = 262.467
     angle = 2005.03 / 60
-    v0 = np.array([muzzle_speed * np.cos(angle * math.pi / 180), 0.0, muzzle_speed * np.sin(angle * math.pi / 180)])
+    v0 = np.array([muzzle_speed * np.cos(angle * np.pi / 180),
+                  0.0, muzzle_speed * np.sin(angle * np.pi / 180)])
     time_of_flight = 10.0
 
     ts, xs, vs = numerical_solve(v0, bc, time_of_flight, cd_func)
@@ -176,4 +180,6 @@ def main():
             )
         )
 
-main()
+
+if __name__ == '__main__':
+    main()
