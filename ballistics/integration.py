@@ -43,6 +43,32 @@ class EulerMethodIntegrator(NumericalIntegrator):
         return self.x, self.v
 
 
+class TwoStepAdamsBashforthIntegrator(NumericalIntegrator):
+    def __init__(
+        self,
+        x: np.ndarray,
+        v: np.ndarray,
+        accel_func: Callable[[np.ndarray], np.ndarray]
+    ) -> None:
+        self.x = x.copy()
+        self.v = v.copy()
+        self.v_prev = self.v.copy()
+        self.accel_prev = accel_func(self.v)
+
+    def step(
+        self,
+        accel_func: Callable[[np.ndarray], np.ndarray],
+        dt: float
+    ) -> (np.ndarray, np.ndarray):
+        self.x += (3.0 * self.v - self.v_prev) / 2.0 * dt
+        self.v_prev = self.v.copy()
+
+        accel = accel_func(self.v)
+        self.v += (3.0 * accel - self.accel_prev) / 2.0 * dt
+        self.accel_prev = accel
+        return self.x, self.v
+
+
 class HeunsMethodIntegrator(NumericalIntegrator):
     def __init__(
         self,
