@@ -1,5 +1,5 @@
-from environment import *
-from integration import *
+from .environment import *
+from .integration import *
 
 from collections import deque
 
@@ -8,6 +8,7 @@ from scipy.interpolate import make_interp_spline
 from scipy.spatial.transform import Rotation
 
 MAX_SIMULATION_TIME = 20.0
+ACCEL_GRAVITY = np.array([0.0, 0.0, -32.17405])
 
 
 def parse_drag_table(filename: str):
@@ -22,7 +23,6 @@ class PointMassTrajectory:
 
     def __init__(self, table: list[(float, float)]) -> None:
         self.cd_func = make_interp_spline(*zip(*table), k=3)
-        self.g = np.array([0.0, 0.0, -32.17405])
 
     def calculate_acceleration(
         self,
@@ -40,7 +40,7 @@ class PointMassTrajectory:
         speed = np.linalg.norm(vw)
         m = speed / v_sound
         cd_star = density_air * np.pi * self.cd_func(m) / (k * bc)
-        decel = -cd_star * speed * vw + self.g
+        decel = -cd_star * speed * vw + ACCEL_GRAVITY
         return decel
 
     def solve_for_initial_velocity(
@@ -122,7 +122,7 @@ class PointMassTrajectory:
                 raise Exception('Unable to solve for vertical firing angle')
         else:
             raise Exception('Unable to solve for vertical firing angle')
-        
+
         v0 = Rotation.from_euler('y', -ver_angle).apply(v0)
 
         hor_angle = 0.0
@@ -171,7 +171,7 @@ class PointMassTrajectory:
 
         else:
             raise Exception('Unable to solve for horizontal firing angle')
-        
+
         v0 = Rotation.from_euler('z', hor_angle).apply(v0)
         return v0
 
@@ -237,7 +237,6 @@ def main():
         dt,
         rh=50
     )
-    
 
     ts, xs, vs = pm_traj.calculate_trajectory(
         x0, v0, bc, max_range, integrator_type, dt, rh=50)

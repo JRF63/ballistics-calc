@@ -100,6 +100,7 @@ class BeemansAlgorithmIntegrator(NumericalIntegrator):
 
         return self.x, self.v
 
+
 class RungeKuttaMethodIntegrator(NumericalIntegrator):
     def __init__(
         self,
@@ -125,5 +126,5 @@ class RungeKuttaMethodIntegrator(NumericalIntegrator):
 
         self.x += (self.v + 2.0 * v_k1 + 2.0 * v_k2 + v_k3) / 6.0 * dt
         self.v += (k1 + 2.0 * k2 + 2.0 * k3 + k4) / 6.0 * dt
-        
+
         return self.x, self.v
