@@ -1,11 +1,14 @@
 from environment import *
 from integration import *
 
+from collections import deque
+
 import numpy as np
 from scipy.interpolate import make_interp_spline
-
+from scipy.spatial.transform import Rotation
 
 MAX_SIMULATION_TIME = 20.0
+
 
 def parse_drag_table(filename: str):
     table = []
@@ -16,17 +19,9 @@ def parse_drag_table(filename: str):
 
 
 class PointMassTrajectory:
-    
-    def __init__(self, integrator: type[NumericalIntegrator]) -> None:
-        g1 = parse_drag_table('data/mcg1.txt')
-        g7 = parse_drag_table('data/mcg7.txt')
 
-        self.g1_curve = make_interp_spline(*zip(*g1), k=3)
-        self.g7_curve = make_interp_spline(*zip(*g7), k=3)
-        self.cd_func = self.g7_curve
-
-        self.integrator = integrator
-
+    def __init__(self, table: list[(float, float)]) -> None:
+        self.cd_func = make_interp_spline(*zip(*table), k=3)
         self.g = np.array([0.0, 0.0, -32.17405])
 
     def calculate_acceleration(
@@ -48,7 +43,7 @@ class PointMassTrajectory:
         decel = -cd_star * speed * vw + self.g
         return decel
 
-    def firing_angle_at_zero(
+    def solve_for_initial_velocity(
         self,
         muzzle_speed: float,
         bc: float,
@@ -56,64 +51,129 @@ class PointMassTrajectory:
         barrel_length: float,
         distance_of_zero: float,
         elevation_of_zero: float,
+        integrator_type: type[NumericalIntegrator],
         dt: float,
         wind: np.ndarray = np.zeros(3),
         temp: float = 59.0,
         pressure: float = 29.92,
         rh: float = 0.0,
-    ):
-        
-        NUM_CONVERGENCE_STEPS = 100
+    ) -> np.ndarray:
+
+        MAX_CONVERGENCE_STEPS = 100
+        EPSILON = 1e-5
 
         density_air = air_density(temp, pressure, rh, 0.0)
         v_sound = speed_sound(temp, rh, 0.0)
 
         def accel_func(v):
             return self.calculate_acceleration(v, v_sound, bc, density_air, wind)
-        
+
         # Where the bullet trajectory starts
         x0 = np.array([barrel_length, 0.0, -sight_height])
+        v0 = np.array([muzzle_speed, 0.0, 0.0])
 
         # Initial guess of vertical angle
-        angle = np.arctan(sight_height / distance_of_zero)
-
-        vert_angle_low = angle - np.radians(45)
-        vert_angle_high = angle + np.radians(45)
+        ver_angle = np.arctan(sight_height / distance_of_zero)
+        ver_angle_low = ver_angle - np.radians(45)
+        ver_angle_high = ver_angle + np.radians(45)
 
         # Solve for vertical angle
-        for _ in range(NUM_CONVERGENCE_STEPS):
-            angle = (vert_angle_low + vert_angle_high) / 2.0
-            
-            v0 = np.array([muzzle_speed * np.cos(angle),
-                          0.0, muzzle_speed * np.sin(angle)])
+        converged = False
+        for _ in range(MAX_CONVERGENCE_STEPS):
+            if converged:
+                break
 
-            integrator = self.integrator(x0, v0, accel_func)
+            ver_angle = (ver_angle_low + ver_angle_high) / 2.0
 
-            x_prev = x0.copy()
+            # Need to negate to match the definition of extrinsic rotation
+            v_guess = Rotation.from_euler('y', -ver_angle).apply(v0)
+
+            integrator = integrator_type(x0, v_guess, accel_func)
+
+            x_hist = deque([x0.copy()], maxlen=4)
 
             for _ in np.arange(0.0, MAX_SIMULATION_TIME, dt):
                 x, _ = integrator.step(accel_func, dt)
+                x_hist.append(x.copy())
+
                 if x[0] > distance_of_zero:
+                    # Add one more data point for cubic spline interpolation
+                    x, _ = integrator.step(accel_func, dt)
+                    x_hist.append(x.copy())
 
-                    drop = np.interp(
-                        distance_of_zero,
-                        [x_prev[0], x[0]],
-                        [x_prev[2], x[2]]
+                    drop_func = make_interp_spline(
+                        [a[0] for a in x_hist],
+                        [a[2] for a in x_hist]
                     )
+                    drop = drop_func(distance_of_zero)
 
-                    if drop > elevation_of_zero:
+                    # Second zero should be attained at the specified distance
+                    if abs(drop - elevation_of_zero) < EPSILON:
+                        converged = True
+                        break
+                    elif drop > elevation_of_zero:
                         # Aiming too high
-                        vert_angle_high = angle
+                        ver_angle_high = ver_angle
                     else:
                         # Aiming too low
-                        vert_angle_low = angle
+                        ver_angle_low = ver_angle
                     break
-                x_prev = x.copy()
             else:
-                # Did not reach the zero target, either angle too high or bullet is not fast enough
-                vert_angle_high = angle
+                raise Exception('Unable to solve for vertical firing angle')
+        else:
+            raise Exception('Unable to solve for vertical firing angle')
+        
+        v0 = Rotation.from_euler('y', -ver_angle).apply(v0)
 
-        return angle
+        hor_angle = 0.0
+        hor_angle_left = -np.radians(45)
+        hor_angle_right = np.radians(45)
+
+        # Solve for horizontal angle
+        converged = False
+        for _ in range(MAX_CONVERGENCE_STEPS):
+            if converged:
+                break
+
+            hor_angle = (hor_angle_left + hor_angle_right) / 2.0
+            v_guess = Rotation.from_euler('z', hor_angle).apply(v0)
+
+            integrator = integrator_type(x0, v_guess, accel_func)
+
+            x_hist = deque([x0.copy()], maxlen=4)
+
+            for _ in np.arange(0.0, MAX_SIMULATION_TIME, dt):
+                x, _ = integrator.step(accel_func, dt)
+                x_hist.append(x.copy())
+
+                if x[0] > distance_of_zero:
+                    x, _ = integrator.step(accel_func, dt)
+                    x_hist.append(x.copy())
+
+                    deflection_func = make_interp_spline(
+                        [a[0] for a in x_hist],
+                        [a[1] for a in x_hist]
+                    )
+                    deflection = deflection_func(distance_of_zero)
+
+                    if abs(deflection) < EPSILON:
+                        converged = True
+                        break
+                    elif deflection > 0.0:
+                        # Aiming too far to the right
+                        hor_angle_right = hor_angle
+                    else:
+                        # Aiming too far to the left
+                        hor_angle_left = hor_angle
+                    break
+            else:
+                raise Exception('Unable to solve for horizontal firing angle')
+
+        else:
+            raise Exception('Unable to solve for horizontal firing angle')
+        
+        v0 = Rotation.from_euler('z', hor_angle).apply(v0)
+        return v0
 
     def calculate_trajectory(
         self,
@@ -121,24 +181,25 @@ class PointMassTrajectory:
         v0: np.ndarray,
         bc: float,
         max_range: float,
+        integrator_type: type[NumericalIntegrator],
         dt: float,
         wind: np.ndarray = np.zeros(3),
         temp: float = 59.0,
         pressure: float = 29.92,
         rh: float = 0.0,
     ) -> (list[float], list[np.ndarray], list[np.ndarray]):
-        
+
         density_air = air_density(temp, pressure, rh, 0.0)
         v_sound = speed_sound(temp, rh, 0.0)
 
         def accel_func(v):
             return self.calculate_acceleration(v, v_sound, bc, density_air, wind)
-        
+
         ts = [0.0]
         xs = [x0.copy()]
         vs = [v0.copy()]
-        
-        integrator = self.integrator(x0, v0, accel_func)
+
+        integrator = integrator_type(x0, v0, accel_func)
         for t in np.arange(dt, MAX_SIMULATION_TIME, dt):
             x, v = integrator.step(accel_func, dt)
 
@@ -153,7 +214,7 @@ class PointMassTrajectory:
 
 
 def main():
-    pm_traj = PointMassTrajectory(RungeKuttaMethodIntegrator)
+    pm_traj = PointMassTrajectory(parse_drag_table('data/mcg7.txt'))
     muzzle_speed = 2970
     bc = 0.371
     sight_height = 1.5 / 12.0
@@ -161,27 +222,25 @@ def main():
     distance_of_zero = 100.0 * 3.0
     elevation_of_zero = 0.0
     max_range = 2500.0 * 3.0
+    integrator_type = RungeKuttaMethodIntegrator
     dt = 1/60
-    
-    angle = pm_traj.firing_angle_at_zero(
+
+    x0 = np.array([barrel_length, 0.0, -sight_height])
+    v0 = pm_traj.solve_for_initial_velocity(
         muzzle_speed,
         bc,
         sight_height,
         barrel_length,
         distance_of_zero,
         elevation_of_zero,
+        integrator_type,
         dt,
-        rh = 50
+        rh=50
     )
-
-
-    x0 = np.array([barrel_length, 0.0, -sight_height])
-    v0 = np.array([muzzle_speed * np.cos(angle), 0.0, muzzle_speed * np.sin(angle)])
-
-    # def sight_line(x):
-    #     return np.interp(x, [0.0, 0.0], [0.0, elevation_of_zero])
     
-    ts, xs, vs = pm_traj.calculate_trajectory(x0, v0, bc, max_range, dt, rh=50)
+
+    ts, xs, vs = pm_traj.calculate_trajectory(
+        x0, v0, bc, max_range, integrator_type, dt, rh=50)
 
     rs = []
     ds = []
@@ -222,8 +281,6 @@ def main():
                 time_curve(x)
             )
         )
-
-    
 
 
 if __name__ == '__main__':
