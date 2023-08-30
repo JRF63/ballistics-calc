@@ -1,5 +1,3 @@
-from abc import ABC, abstractmethod
-from typing import Callable
 from collections import deque
 
 import numpy as np
@@ -97,6 +95,8 @@ class HeunsMethod(CustomOdeSolver):
 
 class BeemansAlgorithm(CustomOdeSolver):
     def __init__(self, fun, t0, y0, t_bound, h=1.0/60.0, **extraneous):
+        if np.shape(y0) != (6,):
+            raise Exception('Expecting a vector of (x, y, z, vx, vy, vz)')
         super().__init__(fun, t0, y0, t_bound, h, **extraneous)
         self.derivative_old = self.fun(self.t, self.y)
 

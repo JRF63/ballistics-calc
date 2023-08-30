@@ -4,7 +4,6 @@ from ballistics.integration import *
 import unittest
 
 import numpy as np
-from scipy.interpolate import make_interp_spline
 
 
 class TestTrajectoryCalcs(unittest.TestCase):

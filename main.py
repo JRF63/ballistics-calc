@@ -1,7 +1,7 @@
 from ballistics.trajectory import *
 
 def main():
-    for method in ('DOP853', 'RungeKuttaMethod', 'BeemansAlgorithm'):
+    for method in ('DOP853', 'LSODA', 'BeemansAlgorithm'):
         pm_traj = PointMassTrajectory(parse_drag_table('ballistics/data/mcg7.txt'))
         muzzle_speed = 2970
         bc = 0.371

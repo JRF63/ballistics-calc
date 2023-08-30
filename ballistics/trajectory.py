@@ -3,7 +3,6 @@ from .integration import *
 
 import numpy as np
 from scipy.interpolate import make_interp_spline
-from scipy.spatial.transform import Rotation
 from scipy.integrate import solve_ivp
 
 MAX_SIMULATION_TIME = 20.0
@@ -92,59 +91,24 @@ class PointMassTrajectory:
         ver_angle_low = ver_angle - np.radians(45)
         ver_angle_high = ver_angle + np.radians(45)
 
-        # Solve for vertical angle
-        converged = False
-        for _ in range(MAX_CONVERGENCE_STEPS):
-            if converged:
-                break
-
-            ver_angle = (ver_angle_low + ver_angle_high) / 2.0
-
-            # Need to negate to match the definition of extrinsic rotation
-            v_guess = Rotation.from_euler('y', -ver_angle).apply(v0)
-
-            y0 = np.concatenate((x0, v_guess))
-
-            result = solve_ivp(
-                fun,
-                (0.0, MAX_SIMULATION_TIME),
-                y0,
-                method,
-                events=range_reached
-            )
-
-            if not result.y_events:
-                raise Exception('Unable to solve for vertical firing angle')
-
-            drop = result.y_events[0][0][2]
-
-            # Second zero should be attained at the specified distance
-            if abs(drop - elevation_of_zero) < EPSILON:
-                converged = True
-                break
-            elif drop > elevation_of_zero:
-                # Aiming too high
-                ver_angle_high = ver_angle
-            else:
-                # Aiming too low
-                ver_angle_low = ver_angle
-        else:
-            raise Exception('Unable to solve for vertical firing angle')
-
-        v0 = Rotation.from_euler('y', -ver_angle).apply(v0)
-
         hor_angle = 0.0
         hor_angle_left = -np.radians(45)
         hor_angle_right = np.radians(45)
 
-        # Solve for horizontal angle
-        converged = False
+        # Solve for vertical angle
+        converged = [False, False]
         for _ in range(MAX_CONVERGENCE_STEPS):
-            if converged:
+            if all(converged):
                 break
 
+            ver_angle = (ver_angle_low + ver_angle_high) / 2.0
             hor_angle = (hor_angle_left + hor_angle_right) / 2.0
-            v_guess = Rotation.from_euler('z', hor_angle).apply(v0)
+
+            v_guess = muzzle_speed * np.array([
+                np.cos(ver_angle) * np.cos(hor_angle),
+                np.sin(hor_angle),
+                np.sin(ver_angle) * np.cos(hor_angle)
+            ])
 
             y0 = np.concatenate((x0, v_guess))
 
@@ -157,23 +121,52 @@ class PointMassTrajectory:
             )
 
             if not result.y_events:
-                raise Exception('Unable to solve for horizontal firing angle')
-            
-            deflection = result.y_events[0][0][1]
+                raise Exception('Unable to solve for firing angle')
+
+            drop = result.y_events[0][0, 2]
+
+            # Second zero should be attained at the specified distance
+            if abs(drop - elevation_of_zero) < EPSILON:
+                converged[0] = True
+            else:
+                # Lost convergence, retry again with larger bounds
+                if converged[0]:
+                    converged[0] = False
+                    ver_angle_high += ver_angle_high - ver_angle
+                    ver_angle_low += ver_angle_low - ver_angle
+
+                if drop > elevation_of_zero:
+                    # Aiming too high
+                    ver_angle_high = ver_angle
+                else:
+                    # Aiming too low
+                    ver_angle_low = ver_angle
+
+            deflection = result.y_events[0][0, 1]
 
             if abs(deflection) < EPSILON:
-                converged = True
-                break
-            elif deflection > 0.0:
-                # Aiming too far to the right
-                hor_angle_right = hor_angle
+                converged[1] = True
             else:
-                # Aiming too far to the left
-                hor_angle_left = hor_angle
-        else:
-            raise Exception('Unable to solve for horizontal firing angle')
+                if converged[1]:
+                    converged[1] = False
+                    hor_angle_right += hor_angle_right - hor_angle
+                    hor_angle_left += hor_angle_left - hor_angle
 
-        v0 = Rotation.from_euler('z', hor_angle).apply(v0)
+                if deflection > 0.0:
+                    # Aiming too far to the right
+                    hor_angle_right = hor_angle
+                else:
+                    # Aiming too far to the left
+                    hor_angle_left = hor_angle
+        else:
+            raise Exception('Unable to solve for firing angle')
+
+        v0 = muzzle_speed * np.array([
+            np.cos(ver_angle) * np.cos(hor_angle),
+            np.sin(hor_angle),
+            np.sin(ver_angle) * np.cos(hor_angle)
+        ])
+        
         return v0
 
     def calculate_trajectory(
