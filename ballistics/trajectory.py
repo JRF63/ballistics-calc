@@ -1,15 +1,21 @@
 from .environment import *
 from .integration import *
 
-from collections import deque
-
 import numpy as np
 from scipy.interpolate import make_interp_spline
 from scipy.spatial.transform import Rotation
+from scipy.integrate import solve_ivp
 
 MAX_SIMULATION_TIME = 20.0
 ACCEL_GRAVITY = np.array([0.0, 0.0, -32.17405])
 
+CUSTOM_ODE_SOLVERS = {
+    'EulerMethod': EulerMethod,
+    'TwoStepAdamsBashforth': TwoStepAdamsBashforth,
+    'HeunsMethod': HeunsMethod,
+    'BeemansAlgorithm': BeemansAlgorithm,
+    'RungeKuttaMethod': RungeKuttaMethod
+}
 
 def parse_drag_table(filename: str):
     table = []
@@ -51,22 +57,31 @@ class PointMassTrajectory:
         barrel_length: float,
         distance_of_zero: float,
         elevation_of_zero: float,
-        integrator_type: type[NumericalIntegrator],
-        dt: float,
         wind: np.ndarray = np.zeros(3),
         temp: float = 59.0,
         pressure: float = 29.92,
         rh: float = 0.0,
+        method: str = 'RK45'
     ) -> np.ndarray:
 
         MAX_CONVERGENCE_STEPS = 100
         EPSILON = 1e-5
 
+        method = CUSTOM_ODE_SOLVERS.get(method, method)
+
         density_air = air_density(temp, pressure, rh, 0.0)
         v_sound = speed_sound(temp, rh, 0.0)
 
-        def accel_func(v):
-            return self.calculate_acceleration(v, v_sound, bc, density_air, wind)
+        def fun(t: float, y: np.ndarray):
+            pos_derivative = y[3:]
+            vel_derivative = self.calculate_acceleration(
+                y[3:], v_sound, bc, density_air, wind)
+            return np.concatenate((pos_derivative, vel_derivative))
+
+        def range_reached(t: float, y: np.ndarray):
+            return y[0] - distance_of_zero
+            
+        range_reached.terminal = True
 
         # Where the bullet trajectory starts
         x0 = np.array([barrel_length, 0.0, -sight_height])
@@ -88,38 +103,31 @@ class PointMassTrajectory:
             # Need to negate to match the definition of extrinsic rotation
             v_guess = Rotation.from_euler('y', -ver_angle).apply(v0)
 
-            integrator = integrator_type(x0, v_guess, accel_func)
+            y0 = np.concatenate((x0, v_guess))
 
-            x_hist = deque([x0.copy()], maxlen=4)
+            result = solve_ivp(
+                fun,
+                (0.0, MAX_SIMULATION_TIME),
+                y0,
+                method,
+                events=range_reached
+            )
 
-            for _ in np.arange(0.0, MAX_SIMULATION_TIME, dt):
-                x, _ = integrator.step(accel_func, dt)
-                x_hist.append(x.copy())
-
-                if x[0] > distance_of_zero:
-                    # Add one more data point for cubic spline interpolation
-                    x, _ = integrator.step(accel_func, dt)
-                    x_hist.append(x.copy())
-
-                    drop_func = make_interp_spline(
-                        [a[0] for a in x_hist],
-                        [a[2] for a in x_hist]
-                    )
-                    drop = drop_func(distance_of_zero)
-
-                    # Second zero should be attained at the specified distance
-                    if abs(drop - elevation_of_zero) < EPSILON:
-                        converged = True
-                        break
-                    elif drop > elevation_of_zero:
-                        # Aiming too high
-                        ver_angle_high = ver_angle
-                    else:
-                        # Aiming too low
-                        ver_angle_low = ver_angle
-                    break
-            else:
+            if not result.y_events:
                 raise Exception('Unable to solve for vertical firing angle')
+
+            drop = result.y_events[0][0][2]
+
+            # Second zero should be attained at the specified distance
+            if abs(drop - elevation_of_zero) < EPSILON:
+                converged = True
+                break
+            elif drop > elevation_of_zero:
+                # Aiming too high
+                ver_angle_high = ver_angle
+            else:
+                # Aiming too low
+                ver_angle_low = ver_angle
         else:
             raise Exception('Unable to solve for vertical firing angle')
 
@@ -138,37 +146,30 @@ class PointMassTrajectory:
             hor_angle = (hor_angle_left + hor_angle_right) / 2.0
             v_guess = Rotation.from_euler('z', hor_angle).apply(v0)
 
-            integrator = integrator_type(x0, v_guess, accel_func)
+            y0 = np.concatenate((x0, v_guess))
 
-            x_hist = deque([x0.copy()], maxlen=4)
+            result = solve_ivp(
+                fun,
+                (0.0, MAX_SIMULATION_TIME),
+                y0,
+                method,
+                events=range_reached
+            )
 
-            for _ in np.arange(0.0, MAX_SIMULATION_TIME, dt):
-                x, _ = integrator.step(accel_func, dt)
-                x_hist.append(x.copy())
-
-                if x[0] > distance_of_zero:
-                    x, _ = integrator.step(accel_func, dt)
-                    x_hist.append(x.copy())
-
-                    deflection_func = make_interp_spline(
-                        [a[0] for a in x_hist],
-                        [a[1] for a in x_hist]
-                    )
-                    deflection = deflection_func(distance_of_zero)
-
-                    if abs(deflection) < EPSILON:
-                        converged = True
-                        break
-                    elif deflection > 0.0:
-                        # Aiming too far to the right
-                        hor_angle_right = hor_angle
-                    else:
-                        # Aiming too far to the left
-                        hor_angle_left = hor_angle
-                    break
-            else:
+            if not result.y_events:
                 raise Exception('Unable to solve for horizontal firing angle')
+            
+            deflection = result.y_events[0][0][1]
 
+            if abs(deflection) < EPSILON:
+                converged = True
+                break
+            elif deflection > 0.0:
+                # Aiming too far to the right
+                hor_angle_right = hor_angle
+            else:
+                # Aiming too far to the left
+                hor_angle_left = hor_angle
         else:
             raise Exception('Unable to solve for horizontal firing angle')
 
@@ -180,34 +181,40 @@ class PointMassTrajectory:
         x0: np.ndarray,
         v0: np.ndarray,
         bc: float,
-        max_range: float,
-        integrator_type: type[NumericalIntegrator],
-        dt: float,
         wind: np.ndarray = np.zeros(3),
         temp: float = 59.0,
         pressure: float = 29.92,
         rh: float = 0.0,
-    ) -> (list[float], list[np.ndarray], list[np.ndarray]):
+        method: str = 'RK45',
+        ranges=None,
+        t_eval=None,
+    ):
+        method = CUSTOM_ODE_SOLVERS.get(method, method)
 
         density_air = air_density(temp, pressure, rh, 0.0)
         v_sound = speed_sound(temp, rh, 0.0)
 
-        def accel_func(v):
-            return self.calculate_acceleration(v, v_sound, bc, density_air, wind)
+        y0 = np.concatenate((x0, v0))
+        
+        def fun(t: float, y: np.ndarray):
+            pos_derivative = y[3:]
+            vel_derivative = self.calculate_acceleration(
+                y[3:], v_sound, bc, density_air, wind)
+            return np.concatenate((pos_derivative, vel_derivative))
+        
+        events = None
+        if ranges is not None:
+            events = [lambda t, y, r=r: y[0] - r for r in ranges]
+            # Stop on the last range
+            events[-1].terminal = True
 
-        ts = [0.0]
-        xs = [x0.copy()]
-        vs = [v0.copy()]
+        result = solve_ivp(
+            fun,
+            (0.0, MAX_SIMULATION_TIME),
+            y0,
+            method=method,
+            t_eval=t_eval,
+            events=events
+        )
 
-        integrator = integrator_type(x0, v0, accel_func)
-        for t in np.arange(dt, MAX_SIMULATION_TIME, dt):
-            x, v = integrator.step(accel_func, dt)
-
-            ts.append(t)
-            xs.append(x.copy())
-            vs.append(v.copy())
-
-            if x[0] > max_range:
-                break
-
-        return ts, xs, vs
+        return result
