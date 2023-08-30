@@ -111,7 +111,7 @@ class BeemansAlgorithm(CustomOdeSolver):
 
         derivative_new = self.fun(t_new, y_new)
         y_new[:3] = self.y[:3] + self.y[3:] * h + \
-            (derivative_new + 2.0 * derivative)[:3] / 6.0 * h * h
+            (derivative_new + 2.0 * derivative)[3:] / 6.0 * h * h
         y_new[3:] = self.y[3:] + (5.0 * derivative_new + 8.0 *
                                   derivative - self.derivative_old)[3:] / 12.0 * h
 
