@@ -198,7 +198,8 @@ class PointMassTrajectory:
             y0,
             method=method,
             t_eval=t_eval,
-            events=events
+            events=events,
+            dense_output=True
         )
 
         return result
